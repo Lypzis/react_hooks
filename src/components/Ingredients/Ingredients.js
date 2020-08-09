@@ -1,4 +1,4 @@
-import React, { useReducer, useState, useEffect, useCallback } from 'react';
+import React, { useReducer, useEffect, useCallback, useMemo } from 'react';
 
 import IngredientForm from './IngredientForm';
 import IngredientList from './IngredientList';
@@ -18,17 +18,37 @@ const ingredientReducer = (currentIngredientsState, action) => {
 				ing => ing.id !== action.ingredientId
 			);
 		default:
-			throw new Error('Something went wrong! D:');
+			throw new Error('Something went terribly wrong! D:');
+	}
+};
+
+const httpReducer = (currentHttpState, action) => {
+	switch (action.type) {
+		case 'SEND':
+			return { loading: true, error: null };
+		case 'SEND_REMOVE':
+			return { ...currentHttpState, loadingRemove: true };
+		case 'RESPONSE':
+			return { ...currentHttpState, loading: false };
+		case 'RESPONSE_REMOVE':
+			return { ...currentHttpState, loadingRemove: false };
+		case 'ERROR':
+			return { loading: false, loadingRemove: false, error: action.err };
+		case 'CLEAR_ERROR':
+			return { ...currentHttpState, error: null };
+		default:
+			throw new Error('Something went terribly wrong! D:');
 	}
 };
 
 const Ingredients = props => {
 	// state, dispatch function to call reducer actions
 	const [userIngredients, dispatch] = useReducer(ingredientReducer, []); // reducer, initialState(empty array in this case);
-
-	const [isLoading, setIsLoading] = useState(false);
-	const [error, setError] = useState();
-	const [isLoadingRemove, setIsLoadingRemove] = useState(false);
+	const [httpState, dispatchHttp] = useReducer(httpReducer, {
+		loading: false,
+		loadingRemove: false,
+		error: null,
+	});
 
 	useEffect(() => console.log('RENDERING INGREDIENTS', userIngredients), [
 		userIngredients,
@@ -40,28 +60,8 @@ const Ingredients = props => {
 		[]
 	); // could pass 'userIngredients' here, but it's redundant, since it is already used in previous 'useEffect'
 
-	// DEPRECATED, already fetch ingredients at Search.js, which renders here, no need to load twice
-	// after every render cycle, by default without dependencies
-	// useEffect(() => {
-	// 	loadIngredients();
-	// }, []);
-	// const loadIngredients = async () => {
-	// 	const response = await fetch(
-	// 		'https://react-hooks-update-39786.firebaseio.com/ingredients.json'
-	// 	);
-
-	// 	const responseData = await response.json();
-
-	// 	const loadedIngredients = [];
-
-	// 	for (const key in responseData)
-	// 		loadedIngredients.push({ ...responseData[key], id: key });
-
-	// 	setUserIngredients(loadedIngredients);
-	// };
-
-	const addIngredientHandler = async ingredient => {
-		setIsLoading(true);
+	const addIngredientHandler = useCallback(async ingredient => {
+		dispatchHttp({ type: 'SEND' });
 
 		const response = await fetch(
 			'https://react-hooks-update-39786.firebaseio.com/ingredients.json',
@@ -74,18 +74,18 @@ const Ingredients = props => {
 
 		const responseData = await response.json();
 
-		setIsLoading(false);
+		dispatchHttp({ type: 'RESPONSE' });
 
 		// the 'name' is the 'id', because firebase...
 		dispatch({
 			type: 'ADD',
 			ingredient: { id: responseData.name, ...ingredient },
 		});
-	};
+	}, []);
 
-	const removeIngredientHandler = async id => {
+	const removeIngredientHandler = useCallback(async id => {
 		try {
-			setIsLoadingRemove(true);
+			dispatchHttp({ type: 'SEND_REMOVE' });
 
 			await fetch(
 				`https://react-hooks-update-39786.firebaseio.com/ingredients/${id}.json`,
@@ -94,36 +94,53 @@ const Ingredients = props => {
 				}
 			);
 
-			setIsLoadingRemove(false);
-
+			dispatchHttp({ type: 'RESPONSE_REMOVE' });
 			dispatch({ type: 'DELETE', ingredientId: id });
 		} catch (err) {
-			setError(err.message);
+			dispatchHttp({ type: 'ERROR', err: err.message });
 		}
-	};
+	}, []);
 
-	const clearError = () => {
-		setError(null);
-		setIsLoadingRemove(false);
-	};
+	const clearError = useCallback(() => {
+		dispatchHttp({ type: 'CLEAR_ERROR' });
+	}, []);
+
+	// now with 'useMemo' it will only rebuild the list if one
+	// of the passed dependencies changes, though
+	// for components  a MUCH BETTER ALTERNATIVE IS TO USE REACT.MEMO at
+	// the component, so only use this if some heavy logic is contained
+	// at the component, so it won't rebuild every time the page state changes
+	const ingredientList = useMemo(() => {
+		return (
+			<IngredientList
+				loading={httpState.loadingRemove}
+				ingredients={userIngredients}
+				onRemoveItem={removeIngredientHandler}
+			/>
+		);
+	}, [userIngredients, httpState, removeIngredientHandler]);
+
+	const ingredientForm = useMemo(() => {
+		return (
+			<IngredientForm
+				onAddIngredient={addIngredientHandler}
+				loading={httpState.loading}
+			/>
+		);
+	}, [httpState, addIngredientHandler]);
 
 	return (
 		<div className='App'>
-			{error && <ErrorModal onClose={clearError}>{error}</ErrorModal>}
+			{httpState.error && (
+				<ErrorModal onClose={clearError}>{httpState.error}</ErrorModal>
+			)}
 
-			<IngredientForm
-				onAddIngredient={addIngredientHandler}
-				loading={isLoading}
-			/>
+			{ingredientForm}
 
 			<section>
 				<Search onLoadIngredients={filteredIngredientsHandler} />
 
-				<IngredientList
-					loading={isLoadingRemove}
-					ingredients={userIngredients}
-					onRemoveItem={removeIngredientHandler}
-				/>
+				{ingredientList}
 			</section>
 		</div>
 	);
